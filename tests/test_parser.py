@@ -78,6 +78,30 @@ def test_parse_toc_entries_extracts_dotted_leader_toc():
     assert entries[2].level == 3
 
 
+def test_parser_uses_ocr_provider_when_pdf_text_is_empty(monkeypatch):
+    from data_agent.ocr import OcrPage
+
+    class FakeOcrProvider:
+        def extract_pdf(self, path):
+            return [OcrPage(page_number=1, text="1 安全说明\n正文")]
+
+    parser = RuleDocumentParser(document_type="manual", ocr_provider=FakeOcrProvider())
+    monkeypatch.setattr(parser, "_read_pdf", lambda path: [(1, "")])
+    chunks = parser.parse("manual.pdf", document_format="pdf")
+    assert chunks[0].text.startswith("1 安全说明")
+    assert chunks[0].metadata.extra["extraction_method"] == "ocr"
+
+
+def test_local_ocr_extracts_pages_from_api_response():
+    from data_agent.ocr import LocalOcrApiProvider
+
+    provider = LocalOcrApiProvider(api_url="http://localhost:8001/ocr/pdf")
+    pages = provider._extract_pages({"pages": [{"page_number": 2, "text": "目录", "metadata": {"ocr_engine": "paddleocr"}}]})
+    assert pages[0].page_number == 2
+    assert pages[0].text == "目录"
+    assert pages[0].metadata["ocr_engine"] == "paddleocr"
+
+
 def test_chunks_to_dify_segments_keeps_content_keywords_and_metadata():
     from data_agent.dify import chunks_to_dify_segments
     from data_agent.models import DocumentChunk
@@ -89,3 +113,9 @@ def test_chunks_to_dify_segments_keeps_content_keywords_and_metadata():
     assert segment.keywords == ("1 安全说明",)
     assert segment.metadata["document_type"] == "manual"
 
+
+def test_dify_segment_api_payload_omits_metadata_for_create_segments():
+    from data_agent.dify import DifySegment
+
+    payload = DifySegment("内容", keywords=("安全",), metadata={"source": "x"}).to_api_payload()
+    assert payload == {"content": "内容", "answer": "", "keywords": ["安全"]}

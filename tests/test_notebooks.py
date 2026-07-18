@@ -12,3 +12,4 @@ def test_pdf_to_milvus_and_dify_notebook_is_valid_and_reviewable():
     assert "write_dify_jsonl" in sources
     assert "write_dify_text" in sources
     assert "PDF_FILES" in sources
+    assert "DifyKnowledgeClient" in sources
