@@ -1,0 +1,20 @@
+[project]
+name = "data-agent"
+version = "0.1.0"
+description = "PDF/DOCX rule parser with local BGE embeddings, Milvus knowledge-base storage, and metadata indexing for intelligent Q&A."
+requires-python = ">=3.10"
+dependencies = [
+  "pymilvus>=2.4.0",
+  "pypdf>=4.0.0",
+  "python-docx>=1.1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
+
+[project.scripts]
+rule-kb = "data_agent.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
