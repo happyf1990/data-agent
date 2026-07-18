@@ -8,9 +8,13 @@ from pathlib import Path
 from typing import Iterable, Literal
 
 from data_agent.models import DocumentChunk, DocumentMetadata
+from data_agent.ocr import OcrProvider
 
 DocumentFormat = Literal["auto", "pdf", "docx"]
 DocumentType = Literal["generic", "policy", "contract", "faq", "manual"]
+
+DocumentFormat = Literal["auto", "pdf", "docx"]
+DocumentType = Literal["generic", "policy", "contract", "faq"]
 
 SECTION_PATTERN = re.compile(
     r"^(第[一二三四五六七八九十百千万0-9]+[章节条款]|[0-9]+(?:\.[0-9]+)*[、.．)]|[一二三四五六七八九十]+[、.．)])\s*(.+)?$"
@@ -77,6 +81,8 @@ class RuleDocumentParser:
     ``policy`` focuses on chapters/articles, ``contract`` keeps clauses and parties
     together, ``faq`` keeps question/answer pairs together, ``manual`` targets numbered
     product/manual sections and OCR table-of-contents text, and ``generic`` is the fallback strategy.
+    together, ``faq`` keeps question/answer pairs together, and ``generic`` is the
+    fallback strategy.
     """
 
     def __init__(
@@ -84,6 +90,8 @@ class RuleDocumentParser:
         chunk_size: int | None = None,
         chunk_overlap: int | None = None,
         document_type: DocumentType = "policy",
+        ocr_provider: OcrProvider | None = None,
+        ocr_on_empty: bool = True,
     ) -> None:
         if document_type not in PROFILES:
             allowed = ", ".join(PROFILES)
@@ -95,6 +103,8 @@ class RuleDocumentParser:
             raise ValueError("chunk_size must be greater than 0")
         if self.chunk_overlap < 0 or self.chunk_overlap >= self.chunk_size:
             raise ValueError("chunk_overlap must be >= 0 and smaller than chunk_size")
+        self.ocr_provider = ocr_provider
+        self.ocr_on_empty = ocr_on_empty
 
     def parse(
         self,
@@ -108,6 +118,12 @@ class RuleDocumentParser:
         metadata_extra = {"document_type": self.profile.name, "document_format": resolved_format}
         metadata_extra.update(extra_metadata or {})
         extraction_method = "text"
+        if resolved_format == "pdf":
+            pages = self._read_pdf(document_path)
+            if self.ocr_provider and self.ocr_on_empty and self._needs_ocr(pages):
+                pages = [(page.page_number, page.text) for page in self.ocr_provider.extract_pdf(document_path)]
+                extraction_method = "ocr"
+        metadata = DocumentMetadata.from_path(document_path, metadata_extra)
         if resolved_format == "pdf":
             pages = self._read_pdf(document_path)
         elif resolved_format == "docx":
