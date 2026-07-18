@@ -9,6 +9,23 @@
 3. 按文档类型分块：`manual`、`policy`、`contract`、`faq`、`generic`。
 4. 导出本地 Dify 上传文件：`.txt` 便于直接上传 Dify Knowledge，`.jsonl` 保留 chunk metadata 便于检查。
 5. 可选：用本地 BGE embedding 将 chunks 写入 Milvus。
+
+## 安装
+
+### Notebook 调用是否必须 `pip install -e .`？
+
+不必须。Notebook 第 0 步会把仓库 `src/` 加到 `sys.path`，所以在仓库根目录启动 notebook 时，可以直接 import 当前源码。
+
+如果只做 notebook review，安装第三方依赖即可：
+
+```bash
+pip install paddlepaddle==3.3.0 paddleocr pymupdf pymilvus pypdf python-docx
+```
+
+如果希望在任意目录都能 `import data_agent`，或希望用 editable package 方式开发，再执行：
+
+```bash
+pip install -e '.[dev]'
 # Data Agent Rule Knowledge Base
 
 一个面向智能问答的规则文档处理工具：解析 PDF/DOCX 制度文件，按制度类型选择对应切割策略，使用本地 BGE API 生成 embedding，写入 Milvus 向量知识库，并保留元数据用于过滤、溯源和回答引用。
