@@ -9,6 +9,7 @@ from pathlib import Path
 from data_agent.dify import write_dify_jsonl
 from data_agent.embeddings import HashEmbeddingProvider, LocalBGEEmbeddingProvider
 from data_agent.ocr import LocalOcrApiProvider
+from data_agent.embeddings import HashEmbeddingProvider, LocalBGEEmbeddingProvider
 from data_agent.parser import RuleDocumentParser
 from data_agent.qa import build_grounded_prompt
 from data_agent.store import MilvusRuleKnowledgeBase
@@ -41,6 +42,10 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--document-format", choices=["auto", "pdf", "docx"], default="auto")
     export.add_argument("--ocr-api-url", help="扫描版 PDF 的本地 OCR API 地址")
     export.add_argument("--metadata", default="{}", help="追加元数据 JSON")
+
+    ingest.add_argument("--document-type", choices=["generic", "policy", "contract", "faq"], default="policy", help="制度/规则文件类型，用于选择对应切割策略")
+    ingest.add_argument("--document-format", choices=["auto", "pdf", "docx"], default="auto", help="显式指定解析格式；auto 根据扩展名判断")
+    ingest.add_argument("--metadata", default="{}", help="追加元数据 JSON，例如 '{\"dept\":\"hr\"}'")
 
     search = subparsers.add_parser("search", help="检索知识库并输出问答提示词")
     search.add_argument("question")
@@ -89,6 +94,7 @@ def main() -> None:
             ocr_provider=ocr_provider,
             ocr_on_empty=not args.no_ocr_on_empty,
         )
+        parser = RuleDocumentParser(document_type=args.document_type)
         extra_metadata = json.loads(args.metadata)
         total = 0
         for path in args.paths:

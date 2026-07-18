@@ -13,6 +13,9 @@ from data_agent.ocr import OcrProvider
 DocumentFormat = Literal["auto", "pdf", "docx"]
 DocumentType = Literal["generic", "policy", "contract", "faq", "manual"]
 
+DocumentFormat = Literal["auto", "pdf", "docx"]
+DocumentType = Literal["generic", "policy", "contract", "faq"]
+
 SECTION_PATTERN = re.compile(
     r"^(第[一二三四五六七八九十百千万0-9]+[章节条款]|[0-9]+(?:\.[0-9]+)*[、.．)]|[一二三四五六七八九十]+[、.．)])\s*(.+)?$"
 )
@@ -78,6 +81,8 @@ class RuleDocumentParser:
     ``policy`` focuses on chapters/articles, ``contract`` keeps clauses and parties
     together, ``faq`` keeps question/answer pairs together, ``manual`` targets numbered
     product/manual sections and OCR table-of-contents text, and ``generic`` is the fallback strategy.
+    together, ``faq`` keeps question/answer pairs together, and ``generic`` is the
+    fallback strategy.
     """
 
     def __init__(
@@ -118,6 +123,9 @@ class RuleDocumentParser:
             if self.ocr_provider and self.ocr_on_empty and self._needs_ocr(pages):
                 pages = [(page.page_number, page.text) for page in self.ocr_provider.extract_pdf(document_path)]
                 extraction_method = "ocr"
+        metadata = DocumentMetadata.from_path(document_path, metadata_extra)
+        if resolved_format == "pdf":
+            pages = self._read_pdf(document_path)
         elif resolved_format == "docx":
             pages = [(None, "\n".join(self._read_docx(document_path)))]
         else:
