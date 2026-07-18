@@ -75,3 +75,159 @@ rule-kb search "员工年假如何计算？" \
 ```bash
 rule-kb search "员工年假如何计算？" --filter 'metadata["department"] == "hr" and metadata["document_type"] == "policy"'
 ```
+
+## 图片型/扫描版 PDF 如何处理和组织
+
+如果 PDF 页面像截图一样，本质是扫描图片，`pypdf` 往往抽不出文本。推荐流程是：
+
+1. 先对 PDF 页面做 OCR，得到每页文本，并保留页码、版面块坐标等信息。
+2. 对目录页使用 `parse_toc_entries()` 识别 `1.1 标题 ...... 1-1` 这类目录行，形成章节号、标题、页码标签和层级。
+3. 正文使用 `--document-type manual`，按 `1`、`1.1`、`1.1.1` 等编号切割。
+4. 入库 metadata 建议保存 `document_type=manual`、`chapter_number`、`section_title`、`page_number`、`page_label`、`bbox`、`ocr_engine`、`ocr_confidence` 等字段。
+5. 问答检索时先用 metadata 过滤手册类型或章节范围，再召回 chunk，最后由 LLM 基于证据回答。
+
+目录文本解析示例：
+
+```python
+from data_agent import parse_toc_entries
+
+ocr_text = """
+1 安全说明 ........ 1-1
+1.1 人员防护 ........ 1-1
+1.1.1 个人防护装备 ........ 1-1
+"""
+
+entries = parse_toc_entries(ocr_text)
+for entry in entries:
+    print(entry.number, entry.title, entry.page_label, entry.level)
+```
+
+## 代码调用方式
+
+当前工具既提供 CLI，也提供可被业务系统直接调用的 Python 接口。典型用法：
+
+```python
+from data_agent import LocalBGEEmbeddingProvider, RuleKnowledgeService
+
+embedding = LocalBGEEmbeddingProvider(
+    api_url="http://localhost:8000/v1/embeddings",
+    model="bge-m3",
+    dimension=1024,
+)
+
+service = RuleKnowledgeService.connect(
+    milvus_uri="http://localhost:19530",
+    collection_name="rule_knowledge_base",
+    embedding_provider=embedding,
+)
+
+service.ingest_file(
+    "./docs/manual.pdf",
+    document_type="manual",
+    document_format="pdf",
+    metadata={"department": "maintenance", "version": "2026"},
+)
+
+prompt = service.answer_prompt(
+    "焊前需要做哪些安全检查？",
+    limit=5,
+    metadata_filter='metadata["document_type"] == "manual"',
+)
+print(prompt)
+```
+
+## OCR 当前怎么接入
+
+当前项目不在进程内绑定某个 OCR 引擎，而是通过 `LocalOcrApiProvider` 对接本地 OCR HTTP 服务。这样可以按部署环境选择 PaddleOCR、Tesseract、云厂商 OCR 或企业内部版面分析服务。
+
+默认约定：
+
+```text
+POST http://localhost:8001/ocr/pdf
+{"path":"/absolute/path/manual.pdf"}
+```
+
+OCR 服务返回分页文本：
+
+```json
+{
+  "pages": [
+    {
+      "page_number": 1,
+      "text": "1 安全说明 ........ 1-1\n1.1 人员防护 ........ 1-1",
+      "metadata": {"ocr_engine": "paddleocr", "ocr_confidence": 0.96}
+    }
+  ]
+}
+```
+
+解析器处理 PDF 时会先尝试普通文本抽取；如果文本为空，并且传入了 OCR provider，则自动调用 OCR，再用 OCR 文本继续按 `document_type` 切割。CLI 用法：
+
+```bash
+rule-kb ingest ./docs/scanned-manual.pdf \
+  --document-type manual \
+  --document-format pdf \
+  --ocr-api-url http://localhost:8001/ocr/pdf
+```
+
+代码调用方式：
+
+```python
+from data_agent import LocalBGEEmbeddingProvider, LocalOcrApiProvider, RuleKnowledgeService
+
+service = RuleKnowledgeService.connect(
+    milvus_uri="http://localhost:19530",
+    collection_name="rule_knowledge_base",
+    embedding_provider=LocalBGEEmbeddingProvider(),
+)
+
+service.ingest_file(
+    "./docs/scanned-manual.pdf",
+    document_type="manual",
+    document_format="pdf",
+    ocr_provider=LocalOcrApiProvider("http://localhost:8001/ocr/pdf"),
+    metadata={"source_kind": "scanned_pdf"},
+)
+```
+
+## 同时支持 Milvus 和 Dify RAG
+
+分块后的内容可以走两条链路：
+
+1. **本项目自管 RAG**：对 chunk 调本地 BGE embedding，然后写入 Milvus，后续用 `rule-kb search` 或 `RuleKnowledgeService.answer_prompt()` 检索。
+2. **Dify RAG**：复用同一批 chunk，导出为 Dify 友好的 segment JSONL，或通过 `DifyKnowledgeClient` 调 Dify Knowledge API 创建文本型文档，让 Dify 负责索引和问答应用编排。
+
+导出 JSONL：
+
+```bash
+rule-kb export-dify-jsonl ./docs/manual.pdf \
+  --output ./manual.dify.jsonl \
+  --document-type manual \
+  --document-format pdf \
+  --metadata '{"department":"maintenance"}'
+```
+
+代码调用 Dify：
+
+```python
+from data_agent import DifyKnowledgeClient, RuleKnowledgeService
+
+client = DifyKnowledgeClient(
+    api_base_url="https://your-dify.example.com/v1",
+    api_key="DIFY_KNOWLEDGE_API_KEY",
+)
+
+service.push_file_to_dify(
+    "./docs/manual.pdf",
+    dify_client=client,
+    dataset_id="your-dataset-id",
+    document_type="manual",
+    document_format="pdf",
+)
+```
+
+如果你希望完全保留本工具已经切好的 chunk，可以先用 Dify 的 `create-by-text` 创建一个空/合并文本 document，再用 `create_segments()` 将 `chunks_to_dify_segments()` 的结果作为自定义 segments 写入对应 document。
+
+## Notebook review 示例
+
+`notebooks/pdf_to_milvus_and_dify_rag.ipynb` 提供了端到端本地测试说明：读取一个本地 PDF，配置 PaddleOCR 风格的本地 OCR HTTP 接口，配置本地 BGE embedding 接口，显式展示解析分块、目录解析、Milvus 入库、Dify JSONL 导出和 Dify Knowledge API 调用代码块。Notebook 中真实入库和真实 Dify API 调用默认注释，便于 review 时逐块检查后再手动执行。

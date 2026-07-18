@@ -60,3 +60,62 @@ def test_build_grounded_prompt_includes_citations():
     assert "只能依据" in prompt
     assert "[1]" in prompt
     assert "制度.docx" in prompt
+
+
+def test_manual_profile_recognizes_numbered_manual_titles():
+    parser = RuleDocumentParser(document_type="manual")
+    assert parser._section_heading("1.1 人员防护") == "1.1 人员防护"
+    assert parser._section_heading("9.36.1 货厢拼装工作准备") == "9.36.1 货厢拼装工作准备"
+
+
+def test_parse_toc_entries_extracts_dotted_leader_toc():
+    from data_agent.toc import parse_toc_entries
+
+    entries = parse_toc_entries("1 安全说明 ........ 1-1\n1.1 人员防护 ........ 1-1\n9.36.1 货厢拼装工作准备 ........ 9-107")
+    assert [entry.number for entry in entries] == ["1", "1.1", "9.36.1"]
+    assert entries[1].title == "人员防护"
+    assert entries[2].page_label == "9-107"
+    assert entries[2].level == 3
+
+
+def test_parser_uses_ocr_provider_when_pdf_text_is_empty(monkeypatch):
+    from data_agent.ocr import OcrPage
+
+    class FakeOcrProvider:
+        def extract_pdf(self, path):
+            return [OcrPage(page_number=1, text="1 安全说明\n正文")]
+
+    parser = RuleDocumentParser(document_type="manual", ocr_provider=FakeOcrProvider())
+    monkeypatch.setattr(parser, "_read_pdf", lambda path: [(1, "")])
+    chunks = parser.parse("manual.pdf", document_format="pdf")
+    assert chunks[0].text.startswith("1 安全说明")
+    assert chunks[0].metadata.extra["extraction_method"] == "ocr"
+
+
+def test_local_ocr_extracts_pages_from_api_response():
+    from data_agent.ocr import LocalOcrApiProvider
+
+    provider = LocalOcrApiProvider(api_url="http://localhost:8001/ocr/pdf")
+    pages = provider._extract_pages({"pages": [{"page_number": 2, "text": "目录", "metadata": {"ocr_engine": "paddleocr"}}]})
+    assert pages[0].page_number == 2
+    assert pages[0].text == "目录"
+    assert pages[0].metadata["ocr_engine"] == "paddleocr"
+
+
+def test_chunks_to_dify_segments_keeps_content_keywords_and_metadata():
+    from data_agent.dify import chunks_to_dify_segments
+    from data_agent.models import DocumentChunk
+
+    metadata = DocumentMetadata.from_path("/tmp/manual.pdf", {"document_type": "manual"})
+    chunk = DocumentChunk("安全说明", metadata, 0, section_title="1 安全说明", page_number=1)
+    segment = chunks_to_dify_segments([chunk])[0]
+    assert segment.content == "安全说明"
+    assert segment.keywords == ("1 安全说明",)
+    assert segment.metadata["document_type"] == "manual"
+
+
+def test_dify_segment_api_payload_omits_metadata_for_create_segments():
+    from data_agent.dify import DifySegment
+
+    payload = DifySegment("内容", keywords=("安全",), metadata={"source": "x"}).to_api_payload()
+    assert payload == {"content": "内容", "answer": "", "keywords": ["安全"]}
